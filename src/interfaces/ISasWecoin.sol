@@ -42,4 +42,9 @@ interface ISasWecoin {
      * @dev penalty pool must be distributed amongst users that are currently staked with a duration
      */
     function deposit(uint256 _amount, uint256 _weeksLocked) external;
+
+    /**
+     * Update the reward tracker to the current epoch and timestamp.
+     */
+    function updateAccumulator() external;
 }
