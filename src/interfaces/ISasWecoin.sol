@@ -8,7 +8,7 @@ interface ISasWecoin {
     struct UserInfo {
         uint depositAmount;
         uint bonusAmount;
-        uint offsetPoints;
+        uint offsetPoints; // DEBT to update based on current accumulator
         uint lastAction;
         uint lockDuration; // amount of weeks
         uint endLockEpoch; // Actual END LOCK EPOCH
@@ -17,7 +17,9 @@ interface ISasWecoin {
     struct EpochInfo {
         // final epoch accumulation is the accumulatedRewardsStakingPower
         uint finalEpochAccumulation;
-        uint totalStakingPowerAdjustment;
+        // This adjustment only is added/substracted to the totalBonusStakingPower when the epoch starts.
+        uint totalBonusStakingPowerAdjustment;
+        bool adjusted;
     }
 
     /**
