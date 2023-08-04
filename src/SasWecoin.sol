@@ -119,7 +119,6 @@ contract SasWecoin is ISasWecoin {
         uint currentEpoch = _currentEpoch();
 
         uint rewardOffset = lastTotalReward;
-        uint totalEmitted = 0;
         uint epochEmissions = 0;
         uint baseStakingPower = _getLatestStakingPower(lastAccumulatedEpoch);
         // NOTE Single EPOCH update
@@ -148,7 +147,6 @@ contract SasWecoin is ISasWecoin {
         lastEpochTimeDiff -= prevTimestamp;
 
         for (uint i = lastAccumulatedEpoch; i <= currentEpoch; i++) {
-            EpochInfo storage epoch = epochs[i];
             epochEmissions = (rewardOffset * 28) / 100_00;
             rewardOffset -= epochEmissions;
             // NOTE Previous epoch accumulated
