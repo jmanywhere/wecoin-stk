@@ -120,7 +120,7 @@ contract SasWecoin is ISasWecoin {
 
         uint rewardOffset = lastTotalReward;
         uint epochEmissions = 0;
-        uint baseStakingPower = _getLatestStakingPower(lastAccumulatedEpoch);
+        uint baseStakingPower = _latestStakingPower(lastAccumulatedEpoch);
         // NOTE Single EPOCH update
         if (currentEpoch == lastAccumulatedEpoch) {
             if (block.timestamp > prevTimestamp) {
@@ -160,14 +160,14 @@ contract SasWecoin is ISasWecoin {
                 accumulatedRewardsPerStakingPower += lastEpochTimeDiff;
                 // NOTE Any epochs between last and current epochs
             } else if (i > lastAccumulatedEpoch && i < currentEpoch) {
-                baseStakingPower = _getLatestStakingPower(i);
+                baseStakingPower = _latestStakingPower(i);
                 accumulatedRewardsPerStakingPower +=
                     (epochEmissions * MAGNIFIER) /
                     baseStakingPower;
                 // NOTE current epoch reached
             } else if (i == currentEpoch) {
                 epochEmissions = epochEmissions / EPOCH_DURATION; // PER SECOND
-                baseStakingPower = _getLatestStakingPower(i);
+                baseStakingPower = _latestStakingPower(i);
                 uint diff1 = block.timestamp -
                     (i * EPOCH_DURATION + stakingStartTime);
                 diff1 = (epochEmissions * diff1 * MAGNIFIER) / baseStakingPower;
@@ -184,7 +184,7 @@ contract SasWecoin is ISasWecoin {
      * @param epochToCheck The epoch to check if adjustement ahs been made
      * @return The total staking power with adjustments made for the given epoch
      */
-    function _getLatestStakingPower(uint epochToCheck) internal returns (uint) {
+    function _latestStakingPower(uint epochToCheck) internal returns (uint) {
         EpochInfo storage epoch = epochs[epochToCheck];
         if (epoch.adjusted)
             return totalBaseStakingPower + totalBonusStakingPower;
@@ -222,5 +222,19 @@ contract SasWecoin is ISasWecoin {
         if (user.endLockEpoch >= _currentEpoch())
             return user.depositAmount + user.bonusAmount;
         return user.depositAmount;
+    }
+
+    function getCurrentTotalStakingPower()
+        external
+        view
+        returns (uint totalStakingPower)
+    {
+        uint currentEpoch = _currentEpoch();
+        totalStakingPower = totalBaseStakingPower + totalBonusStakingPower;
+        for (uint i = lastAccumulatedEpoch; i <= currentEpoch; i++) {
+            EpochInfo storage epoch = epochs[i];
+            if (!epoch.adjusted)
+                totalStakingPower -= epoch.totalBonusStakingPowerAdjustment;
+        }
     }
 }
