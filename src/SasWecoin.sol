@@ -215,4 +215,14 @@ contract SasWecoin is ISasWecoin {
     ) internal pure returns (uint) {
         return 10000 + (25 * Math.sqrt(_lockedEpochs * SQRT_ADJUSTMENT));
     }
+
+    //-----------------------------------------------------------------------------------
+    // External/Public view/pure functions
+    //-----------------------------------------------------------------------------------
+    function getStakingPower(address _user) external view returns (uint) {
+        UserInfo storage user = users[_user];
+        if (user.endLockEpoch >= _currentEpoch())
+            return user.depositAmount + user.bonusAmount;
+        return user.depositAmount;
+    }
 }
