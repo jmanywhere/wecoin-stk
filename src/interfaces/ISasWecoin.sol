@@ -7,9 +7,17 @@ interface ISasWecoin {
     \-----------------------------------------------------------*/
     struct UserInfo {
         uint depositAmount;
+        uint bonusAmount;
         uint offsetPoints;
         uint lastAction;
-        uint lockDuration;
+        uint lockDuration; // amount of weeks
+        uint endLockEpoch; // Actual END LOCK EPOCH
+        uint lockedRewards;
+    }
+    struct EpochInfo {
+        // final epoch accumulation is the accumulatedRewardsStakingPower
+        uint finalEpochAccumulation;
+        uint totalStakingPowerAdjustment;
     }
 
     /**
