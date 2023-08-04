@@ -25,6 +25,7 @@ interface ISasWecoin {
     /**
      * Returns the staking power of the user, relative to the user's deposit amount and time staked.
      * @param _user The address of the user
+     * @return The current staking power of the user
      */
     function getStakingPower(address _user) external view returns (uint256);
 
