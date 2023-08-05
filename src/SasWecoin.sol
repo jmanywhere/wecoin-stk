@@ -121,6 +121,8 @@ contract SasWecoin is ISasWecoin {
         WECOIN.transferFrom(msg.sender, address(this), amount);
         totalRewards += amount;
         lastTotalReward += amount;
+        uint currentEpoch = _currentEpoch();
+        epochs[currentEpoch].epochTotalBaseReward += amount;
     }
 
     function withdraw() external {
@@ -161,6 +163,7 @@ contract SasWecoin is ISasWecoin {
             }
             totalRewards += penalty;
             lastTotalReward += penalty;
+            epochs[currentEpoch].epochTotalBaseReward += penalty;
             // Adjust the next epochs adjustment since this is an early withdrawal
             epochs[user.endLockEpoch + 1]
                 .totalBonusStakingPowerAdjustment -= user.bonusAmount;
@@ -207,6 +210,7 @@ contract SasWecoin is ISasWecoin {
             if (block.timestamp > prevTimestamp) {
                 uint diff = block.timestamp - prevTimestamp;
                 // Get the next accumulation of rewards
+                epochs[currentEpoch].epochTotalBaseReward = rewardOffset;
                 diff =
                     (rewardOffset * WEEKLY_EMISSIONS * diff * MAGNIFIER) /
                     (EPOCH_DURATION * EMISSIONS_BASE * baseStakingPower);
@@ -226,18 +230,18 @@ contract SasWecoin is ISasWecoin {
             EPOCH_DURATION +
             stakingStartTime;
         lastEpochTimeDiff -= prevTimestamp;
+        uint emissionDenominator = EMISSIONS_BASE * EPOCH_DURATION;
 
         for (uint i = lastAccumulatedEpoch; i <= currentEpoch; i++) {
             EpochInfo storage epoch = epochs[i];
-            epochEmissions = (rewardOffset * 28) / 100_00;
-            rewardOffset -= epochEmissions;
+            epoch.epochTotalBaseReward = rewardOffset;
+            epochEmissions = (rewardOffset * WEEKLY_EMISSIONS);
+            rewardOffset -= epochEmissions / EMISSIONS_BASE;
             // NOTE Previous epoch accumulated
             if (i == lastAccumulatedEpoch) {
-                epochEmissions = epochEmissions / EPOCH_DURATION; // PER SECOND
-
                 lastEpochTimeDiff =
                     (epochEmissions * lastEpochTimeDiff * MAGNIFIER) /
-                    baseStakingPower;
+                    (baseStakingPower * emissionDenominator);
 
                 accumulatedRewardsPerStakingPower += lastEpochTimeDiff;
                 // NOTE Any epochs between last and current epochs
@@ -245,14 +249,15 @@ contract SasWecoin is ISasWecoin {
                 baseStakingPower = _latestStakingPower(i);
                 accumulatedRewardsPerStakingPower +=
                     (epochEmissions * MAGNIFIER) /
-                    baseStakingPower;
+                    (baseStakingPower * emissionDenominator);
                 // NOTE current epoch reached
             } else if (i == currentEpoch) {
-                epochEmissions = epochEmissions / EPOCH_DURATION; // PER SECOND
                 baseStakingPower = _latestStakingPower(i);
                 uint diff1 = block.timestamp -
                     (i * EPOCH_DURATION + stakingStartTime);
-                diff1 = (epochEmissions * diff1 * MAGNIFIER) / baseStakingPower;
+                diff1 =
+                    (epochEmissions * diff1 * MAGNIFIER) /
+                    (baseStakingPower * emissionDenominator);
                 accumulatedRewardsPerStakingPower += diff1;
             }
             epoch.finalEpochAccumulation = accumulatedRewardsPerStakingPower;
@@ -269,11 +274,31 @@ contract SasWecoin is ISasWecoin {
      */
     function _latestStakingPower(uint epochToCheck) internal returns (uint) {
         EpochInfo storage epoch = epochs[epochToCheck];
+        (
+            uint stakingPower,
+            uint adjustment,
+            bool update
+        ) = _getLatestStakingPower(epochToCheck);
+        if (update) {
+            epoch.adjusted = true;
+            totalBonusStakingPower -= adjustment;
+        }
+        return stakingPower;
+    }
+
+    function _getLatestStakingPower(
+        uint epochToCheck
+    ) internal view returns (uint stakingPower, uint adjustment, bool update) {
+        EpochInfo storage epoch = epochs[epochToCheck];
         if (epoch.adjusted)
-            return totalBaseStakingPower + totalBonusStakingPower;
-        epoch.adjusted = true;
-        totalBonusStakingPower -= epoch.totalBonusStakingPowerAdjustment;
-        return totalBaseStakingPower + totalBonusStakingPower;
+            return (totalBaseStakingPower + totalBonusStakingPower, 0, false);
+        return (
+            totalBaseStakingPower +
+                totalBonusStakingPower -
+                epoch.totalBonusStakingPowerAdjustment,
+            epoch.totalBonusStakingPowerAdjustment,
+            true
+        );
     }
 
     /**
@@ -403,5 +428,57 @@ contract SasWecoin is ISasWecoin {
         return _getLastEpoch(timestamp);
     }
 
-    function pendingRewards(address _user) external view returns (uint) {}
+    function pendingRewards(address _user) external view returns (uint) {
+        UserInfo storage user = users[_user];
+        if (user.depositAmount == 0) return 0;
+
+        uint lastEpoch = _getLastEpoch(user.lastAction);
+        uint currentEpoch = _currentEpoch();
+        uint rewardsAccumulated;
+        uint epochTotal; // total reward pool amount on that epoch
+        uint totalEmitted;
+        uint usedStakingPower;
+        uint userStakingPower = user.depositAmount;
+        uint offset;
+        for (uint i = lastEpoch; i <= currentEpoch; i++) {
+            // If current EPOCHTotalBaseReward is 0, get previous epoch and adjust
+            if (epochs[i].epochTotalBaseReward == 0 && i > 0) {
+                epochTotal = epochs[i - 1].epochTotalBaseReward;
+                totalEmitted = (epochTotal * WEEKLY_EMISSIONS) / EMISSIONS_BASE;
+                epochTotal -= totalEmitted;
+                totalEmitted = 0;
+            } else {
+                epochTotal = epochs[i].epochTotalBaseReward;
+            }
+            (usedStakingPower, , ) = _getLatestStakingPower(i - 1);
+            if (user.endLockEpoch >= i && user.endLockEpoch != 0) {
+                userStakingPower += user.bonusAmount;
+            }
+            totalEmitted = epochTotal * WEEKLY_EMISSIONS * MAGNIFIER;
+            if (lastEpoch == currentEpoch) {
+                offset = block.timestamp - user.lastAction;
+                totalEmitted =
+                    (totalEmitted * offset) /
+                    (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
+                return (totalEmitted * userStakingPower) / MAGNIFIER;
+            }
+            if (i == lastEpoch) {
+                offset = (i + 1) * EPOCH_DURATION - user.lastAction;
+                totalEmitted =
+                    (totalEmitted * offset) /
+                    (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
+                rewardsAccumulated += totalEmitted;
+            } else if (i == currentEpoch) {
+                offset = block.timestamp - (i * EPOCH_DURATION);
+                totalEmitted =
+                    (totalEmitted * offset) /
+                    (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
+                rewardsAccumulated += totalEmitted * userStakingPower + offset;
+            } else {
+                totalEmitted /= (usedStakingPower * EPOCH_DURATION);
+                rewardsAccumulated += totalEmitted;
+            }
+        }
+        return rewardsAccumulated / MAGNIFIER;
+    }
 }

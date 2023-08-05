@@ -15,6 +15,7 @@ interface ISasWecoin {
         uint lockedRewards;
     }
     struct EpochInfo {
+        uint epochTotalBaseReward;
         // final epoch accumulation is the accumulatedRewardsStakingPower
         uint finalEpochAccumulation;
         // This adjustment only is added/substracted to the totalBonusStakingPower when the epoch starts.
