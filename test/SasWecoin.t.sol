@@ -16,6 +16,9 @@ contract SasWecoinTest is Test {
 
     uint initStartTime;
 
+    event LockReward(address indexed user, uint256 totalAmountLocked);
+    event ClaimReward(address indexed user, uint256 amount);
+
     function setUp() public {
         wecoin = new ERC20PresetFixedSupply(
             "WECOIN",
@@ -127,5 +130,86 @@ contract SasWecoinTest is Test {
         assertEq(lock, 16);
         assertEq(endLock, 16);
         assertEq(lockedRewards, 0);
+    }
+
+    function test_single_user_claims_NOLOCK() public addedReward {
+        // --------------- NO LOCK ----------------
+        vm.prank(user1);
+        sas.deposit(100 ether, 0);
+
+        vm.warp(initStartTime + 1 hours); // 1 hour after rewards started accruing
+
+        uint expectedReward = (100_000 ether * 4) / 100_00;
+        expectedReward = (expectedReward * 1 hours) / 1 days;
+
+        uint initBalance = wecoin.balanceOf(user1);
+
+        vm.prank(user1);
+        // FORGE IS NOT WORKING WITH EXPECT EMITS, WILL HAVE TO MANUALLY CHECK EMISSIONS
+        // vm.expectEmit();
+        // emit ClaimReward(user1, expectedReward);
+        sas.claimOrLock();
+
+        (, , uint offset, uint last, , , uint locked) = sas.users(user1);
+        assertGt(offset, 0);
+        assertEq(last, block.timestamp);
+        assertEq(locked, 0);
+        assertEq(wecoin.balanceOf(user1), initBalance + expectedReward);
+    }
+
+    function test_single_user_claims_LOCK_16WEEKS() public addedReward {
+        // --------------- NO LOCK ----------------
+        vm.prank(user1);
+        sas.deposit(200 ether, 0);
+        // --------------- LOCKED ----------------
+        vm.prank(user2);
+        sas.deposit(100 ether, 16);
+
+        assertEq(sas.getStakingPower(user2), 200 ether);
+
+        vm.warp(initStartTime + 1 hours); // 1 hour after rewards started accruing
+
+        uint expectedReward = (100_000 ether * 4) / 100_00;
+        expectedReward = (expectedReward * 1 hours) / 1 days;
+        expectedReward /= 2;
+
+        vm.prank(user2);
+        // FORGE IS NOT WORKING WITH EXPECT EMITS, WILL HAVE TO MANUALLY CHECK EMISSIONS
+        // vm.expectEmit();
+        // emit LockReward(user1, expectedReward);
+        sas.claimOrLock();
+
+        (, , uint offset, uint last, , , uint locked) = sas.users(user2);
+        assertGt(offset, 0);
+        assertEq(last, block.timestamp);
+        if (locked > expectedReward) {
+            locked -= expectedReward;
+            assertLt(locked, 10);
+        } else {
+            locked = expectedReward - locked;
+            assertLt(locked, 10);
+        }
+
+        //--------------- LOCKED to UNLOCKED ----------------
+        vm.warp(initStartTime + 16 weeks + 6 days + 23 hours + 59 minutes + 59); // wrap up the 16th week
+        vm.prank(user2);
+        sas.claimOrLock();
+        (, , offset, last, , , locked) = sas.users(user2);
+        assertGt(locked, 0);
+
+        skip(1 hours + 1);
+        assertEq(sas.getCurrentEpoch(), 17);
+
+        vm.prank(user2);
+        sas.claimOrLock();
+
+        (, , offset, last, , , locked) = sas.users(user2);
+        assertGt(offset, 0);
+        assertEq(last, block.timestamp);
+        assertEq(locked, 0); // everything was claimed
+        assertEq(sas.getStakingPower(user2), 100 ether);
+        // --------------- CHECK NO LOCK ----------------
+        vm.prank(user1);
+        sas.claimOrLock();
     }
 }
