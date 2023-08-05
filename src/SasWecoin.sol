@@ -4,6 +4,8 @@ pragma solidity 0.8.19;
 import "openzeppelin/token/ERC20/IERC20.sol";
 import "./interfaces/ISasWecoin.sol";
 import "openzeppelin/utils/math/Math.sol";
+// TODO REMOVE
+import "forge-std/console.sol";
 
 contract SasWecoin is ISasWecoin {
     mapping(address => UserInfo) public users;
@@ -21,7 +23,7 @@ contract SasWecoin is ISasWecoin {
     uint private lastTotalReward;
     uint private constant MAGNIFIER = 1e12;
     uint private constant EPOCH_DURATION = 1 weeks;
-    uint private constant SQRT_ADJUSTMENT = 100_00;
+    uint public constant SQRT_ADJUSTMENT = 100_00;
     uint private constant DAILY_EMISSIONS = 4;
     uint private constant WEEKLY_EMISSIONS = 28;
     uint private constant EMISSIONS_BASE = 100_00;
@@ -34,9 +36,9 @@ contract SasWecoin is ISasWecoin {
 
     function deposit(uint _amount, uint256 _weeksLocked) external {
         UserInfo storage user = users[msg.sender];
-        // TODO Lock or claim rewards
+        // Lock or claim rewards
         // NOTE here is where offsetpoints are updated 1 time
-        // claimOrLockRewards(msg.sender);
+        _claimAndLock(msg.sender);
         // get current epoch
         uint currentEpoch = _currentEpoch();
         // Deposit amount
@@ -44,11 +46,13 @@ contract SasWecoin is ISasWecoin {
         uint bonusStakingPower = user.bonusAmount;
         totalBonusStakingPower -= bonusStakingPower;
         totalBaseStakingPower += _amount;
-
         user.lastAction = block.timestamp;
         user.depositAmount = fullAmount;
         // need to check if there is a previous locking period and extend it.
-        if (_weeksLocked > 0 || user.endLockEpoch >= currentEpoch) {
+        if (
+            _weeksLocked > 0 ||
+            (currentEpoch > 0 && user.endLockEpoch >= currentEpoch)
+        ) {
             if (user.endLockEpoch >= currentEpoch) {
                 epochs[user.endLockEpoch + 1]
                     .totalBonusStakingPowerAdjustment -= user.bonusAmount;
@@ -58,6 +62,7 @@ contract SasWecoin is ISasWecoin {
                 user.endLockEpoch = _weeksLocked + currentEpoch;
                 user.lockDuration = _weeksLocked;
             }
+
             uint multiplier = calculateMultiplier(user.lockDuration);
             bonusStakingPower = (fullAmount * multiplier) / SQRT_ADJUSTMENT;
             bonusStakingPower -= fullAmount;
@@ -70,6 +75,7 @@ contract SasWecoin is ISasWecoin {
         } else {
             user.bonusAmount = 0;
         }
+
         // adjust offsetPoints here as well
         user.offsetPoints =
             ((fullAmount + bonusStakingPower) *
@@ -79,18 +85,8 @@ contract SasWecoin is ISasWecoin {
         WECOIN.transferFrom(msg.sender, address(this), _amount);
     }
 
-    function claim(address _user) private returns (uint256) {
-        UserInfo storage user = users[_user];
-
-        //TODO - we have to know the user staking power duration.
-        //TODO - we have to know the user staking power amount.
-
-        _updateAccumulator();
-        // TODO need to make correct calculation of rewards;
-        return
-            (user.depositAmount *
-                accumulatedRewardsPerStakingPower -
-                user.offsetPoints) / MAGNIFIER;
+    function claimOrLock() external {
+        _claimAndLock(msg.sender);
     }
 
     function updateAccumulator() external {
@@ -104,7 +100,7 @@ contract SasWecoin is ISasWecoin {
     }
 
     //-----------------------------------------------------------------------------------
-    // Internal functions
+    // Internal & Private functions
     //-----------------------------------------------------------------------------------
     /**
      * Adjust the current accumulator to the current epoch and timestamp.
@@ -193,30 +189,99 @@ contract SasWecoin is ISasWecoin {
         return totalBaseStakingPower + totalBonusStakingPower;
     }
 
+    /**
+     * Claims the user's current rewards and if time is before lock period, locks them in place. Otherwise it transfers the user their rewards.
+     *
+     */
+    function _claimAndLock(address _user) private {
+        _updateAccumulator();
+
+        UserInfo storage user = users[_user];
+        // Check current EPOCH, if it's <= user.endLockEpoch
+        // this determines which stakingPower to use for rewards.
+        uint lastEpoch = _getLastEpoch(user.lastAction);
+        uint currentEpoch = _currentEpoch();
+        uint userStakingPower = user.depositAmount;
+        uint accumulatedRewards;
+        uint claimableRewards;
+
+        if (currentEpoch <= user.endLockEpoch) {
+            //
+            userStakingPower += user.bonusAmount;
+            accumulatedRewards =
+                userStakingPower *
+                accumulatedRewardsPerStakingPower;
+            user.lockedRewards +=
+                (accumulatedRewards - user.offsetPoints) /
+                MAGNIFIER;
+            user.offsetPoints = accumulatedRewards;
+            emit LockReward(_user, user.lockedRewards);
+        } else if (
+            currentEpoch > user.endLockEpoch && lastEpoch <= user.endLockEpoch
+        ) {
+            // Add full rewards UP TO end of LOCK epoch
+            uint endEpochAccumulated = epochs[user.endLockEpoch]
+                .finalEpochAccumulation;
+            userStakingPower += user.bonusAmount;
+
+            accumulatedRewards = userStakingPower * endEpochAccumulated;
+            claimableRewards = accumulatedRewards - user.offsetPoints;
+
+            endEpochAccumulated = user.depositAmount * endEpochAccumulated;
+
+            userStakingPower = user.depositAmount;
+            accumulatedRewards =
+                userStakingPower *
+                accumulatedRewardsPerStakingPower;
+            claimableRewards += accumulatedRewards - endEpochAccumulated;
+            claimableRewards /= MAGNIFIER;
+            claimableRewards += user.lockedRewards;
+            user.lockedRewards = 0;
+        } else {
+            accumulatedRewards =
+                userStakingPower *
+                accumulatedRewardsPerStakingPower;
+            claimableRewards =
+                (accumulatedRewards - user.offsetPoints) /
+                MAGNIFIER;
+            user.offsetPoints = accumulatedRewards;
+            user.lockedRewards = 0;
+        }
+
+        user.lastAction = block.timestamp;
+
+        if (claimableRewards > 0) {
+            WECOIN.transfer(_user, claimableRewards);
+            emit ClaimReward(_user, claimableRewards);
+        }
+    }
+
     //-----------------------------------------------------------------------------------
     // Internal view functions
     //-----------------------------------------------------------------------------------
     /**
      * @return The current epoch number
+     * @dev if staking has not started, it will return 0
      */
     function _currentEpoch() internal view returns (uint256) {
+        if (stakingStartTime > block.timestamp) return 0;
         return (block.timestamp - stakingStartTime) / EPOCH_DURATION;
     }
 
-    /**
-     * This returns the multiplier for the deposited amount. It has 4 decimal place adjustment.
-     * @param _lockedEpochs The amount of epochs the user is locked for
-     * @return The multiplier based on the amount of epochs locked with 4 decimal places
-     */
-    function calculateMultiplier(
-        uint _lockedEpochs
-    ) internal pure returns (uint) {
-        return 10000 + (25 * Math.sqrt(_lockedEpochs * SQRT_ADJUSTMENT));
+    function _getLastEpoch(uint timestamp) internal view returns (uint) {
+        if (stakingStartTime > timestamp) return 0;
+        return (timestamp - stakingStartTime) / EPOCH_DURATION;
     }
 
     //-----------------------------------------------------------------------------------
     // External/Public view/pure functions
     //-----------------------------------------------------------------------------------
+    function calculateMultiplier(
+        uint _lockedEpochs
+    ) public pure returns (uint) {
+        return 10000 + (25 * Math.sqrt(_lockedEpochs * SQRT_ADJUSTMENT));
+    }
+
     function getStakingPower(address _user) external view returns (uint) {
         UserInfo storage user = users[_user];
         if (user.endLockEpoch >= _currentEpoch())
