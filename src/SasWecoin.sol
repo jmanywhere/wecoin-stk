@@ -178,9 +178,10 @@ contract SasWecoin is ISasWecoin {
             lockDuration: 0,
             lockedRewards: 0
         });
-
+        emit Withdraw(msg.sender, withdrawableAmount);
         // Transfer out WECOIN
-        WECOIN.transfer(msg.sender, withdrawableAmount);
+        if (withdrawableAmount > 0)
+            WECOIN.transfer(msg.sender, withdrawableAmount);
     }
 
     //-----------------------------------------------------------------------------------
