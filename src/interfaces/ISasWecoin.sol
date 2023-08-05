@@ -48,4 +48,36 @@ interface ISasWecoin {
      * Update the reward tracker to the current epoch and timestamp.
      */
     function updateAccumulator() external;
+
+    /**
+     * Calculate the multiplier a user would get for a certain amount of epochs.
+     * @param _lockedEpochs The amount of epochs to lock tokens for
+     * @return The multiplier with 4 decimal places.
+     * @dev Minimum is always 1x => 10000
+     */
+    function calculateMultiplier(
+        uint _lockedEpochs
+    ) external pure returns (uint);
+
+    /**
+     * Returns the total staking power of the contract.
+     * @return The total staking power of the contract.
+     */
+    function getCurrentTotalStakingPower() external view returns (uint);
+
+    //---------------------------------------------------
+    //                  EVENTS
+    //---------------------------------------------------
+    event LockReward(address indexed user, uint256 totalAmountLocked);
+
+    event Deposit(
+        address indexed user,
+        uint256 amount,
+        uint256 bonus,
+        uint256 totalLockPeriod
+    );
+
+    event Withdraw(address indexed user, uint256 amount);
+
+    event ClaimReward(address indexed user, uint256 amount);
 }
