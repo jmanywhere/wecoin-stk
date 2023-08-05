@@ -80,4 +80,9 @@ interface ISasWecoin {
     event Withdraw(address indexed user, uint256 amount);
 
     event ClaimReward(address indexed user, uint256 amount);
+    event WithdrawPenalty(
+        address indexed user,
+        uint256 principalPenalty,
+        uint256 rewardPenalty
+    );
 }
