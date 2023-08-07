@@ -10,6 +10,7 @@ import "forge-std/console.sol";
 error SasWecoin__NoBalanceToWithdraw();
 error SasWecoin__NothingToClaim();
 error SasWecoin__InvalidDepositAmount();
+error SasWecoin__RewardsAlreadyAdded();
 
 contract SasWecoin is ISasWecoin {
     mapping(address => UserInfo) public users;
@@ -24,6 +25,7 @@ contract SasWecoin is ISasWecoin {
     uint public totalBonusStakingPower;
     uint public accumulatedRewardsPerStakingPower;
     uint public rewardPenalty = 5;
+    uint public nextEpochRewardAddition;
     uint private lastAccumulatedEpoch;
     uint private lastTotalReward;
     // This magnifier keeps all decimals when doing integer division
@@ -68,7 +70,9 @@ contract SasWecoin is ISasWecoin {
         uint bonusStakingPower = user.bonusAmount;
         totalBonusStakingPower -= bonusStakingPower;
         totalBaseStakingPower += _amount;
-        user.lastAction = block.timestamp;
+        if (block.timestamp > stakingStartTime)
+            user.lastAction = block.timestamp;
+        else user.lastAction = stakingStartTime;
         user.depositAmount = fullAmount;
         // need to check if there is a previous locking period and extend it.
         if (
@@ -120,9 +124,11 @@ contract SasWecoin is ISasWecoin {
     function addTokenRewards(uint amount) external {
         WECOIN.transferFrom(msg.sender, address(this), amount);
         totalRewards += amount;
-        lastTotalReward += amount;
         uint currentEpoch = _currentEpoch();
-        epochs[currentEpoch].epochTotalBaseReward += amount;
+        if (block.timestamp < stakingStartTime) {
+            epochs[currentEpoch].epochTotalBaseReward += amount;
+            lastTotalReward += amount;
+        } else nextEpochRewardAddition += amount;
     }
 
     function withdraw() external {
@@ -162,8 +168,7 @@ contract SasWecoin is ISasWecoin {
                 emit WithdrawPenalty(msg.sender, 0, penalty);
             }
             totalRewards += penalty;
-            lastTotalReward += penalty;
-            epochs[currentEpoch].epochTotalBaseReward += penalty;
+            nextEpochRewardAddition += penalty;
             // Adjust the next epochs adjustment since this is an early withdrawal
             epochs[user.endLockEpoch + 1]
                 .totalBonusStakingPowerAdjustment -= user.bonusAmount;
@@ -224,34 +229,34 @@ contract SasWecoin is ISasWecoin {
             }
             return;
         }
-
         // NOTE Multiple Epoch diff update
-        uint lastEpochTimeDiff = (lastAccumulatedEpoch + 1) *
-            EPOCH_DURATION +
-            stakingStartTime;
-        lastEpochTimeDiff -= prevTimestamp;
         uint emissionDenominator = EMISSIONS_BASE * EPOCH_DURATION;
 
         for (uint i = lastAccumulatedEpoch; i <= currentEpoch; i++) {
             EpochInfo storage epoch = epochs[i];
             epoch.epochTotalBaseReward = rewardOffset;
+
+            if (nextEpochRewardAddition > 0 && i > lastAccumulatedEpoch) {
+                rewardOffset += nextEpochRewardAddition;
+                nextEpochRewardAddition = 0;
+                epoch.epochTotalBaseReward = rewardOffset;
+            }
             epochEmissions = (rewardOffset * WEEKLY_EMISSIONS);
             rewardOffset -= epochEmissions / EMISSIONS_BASE;
             // NOTE Previous epoch accumulated
             if (i == lastAccumulatedEpoch) {
+                uint lastEpochTimeDiff = (lastAccumulatedEpoch *
+                    EPOCH_DURATION) + stakingStartTime;
+                lastEpochTimeDiff += EPOCH_DURATION;
+                lastEpochTimeDiff -= prevTimestamp;
                 lastEpochTimeDiff =
                     (epochEmissions * lastEpochTimeDiff * MAGNIFIER) /
                     (baseStakingPower * emissionDenominator);
 
                 accumulatedRewardsPerStakingPower += lastEpochTimeDiff;
-                // NOTE Any epochs between last and current epochs
-            } else if (i > lastAccumulatedEpoch && i < currentEpoch) {
-                baseStakingPower = _latestStakingPower(i);
-                accumulatedRewardsPerStakingPower +=
-                    (epochEmissions * MAGNIFIER) /
-                    (baseStakingPower * emissionDenominator);
-                // NOTE current epoch reached
-            } else if (i == currentEpoch) {
+            }
+            // NOTE current epoch reached
+            else if (i == currentEpoch) {
                 baseStakingPower = _latestStakingPower(i);
                 uint diff1 = block.timestamp -
                     (i * EPOCH_DURATION + stakingStartTime);
@@ -259,6 +264,13 @@ contract SasWecoin is ISasWecoin {
                     (epochEmissions * diff1 * MAGNIFIER) /
                     (baseStakingPower * emissionDenominator);
                 accumulatedRewardsPerStakingPower += diff1;
+            }
+            // NOTE Any epochs between last and current epochs
+            else {
+                baseStakingPower = _latestStakingPower(i);
+                accumulatedRewardsPerStakingPower +=
+                    (epochEmissions * MAGNIFIER * EPOCH_DURATION) /
+                    (baseStakingPower * emissionDenominator);
             }
             epoch.finalEpochAccumulation = accumulatedRewardsPerStakingPower;
         }
@@ -379,8 +391,7 @@ contract SasWecoin is ISasWecoin {
      * @dev if staking has not started, it will return 0
      */
     function _currentEpoch() internal view returns (uint256) {
-        if (stakingStartTime > block.timestamp) return 0;
-        return (block.timestamp - stakingStartTime) / EPOCH_DURATION;
+        return _getLastEpoch(block.timestamp);
     }
 
     function _getLastEpoch(uint timestamp) internal view returns (uint) {
@@ -433,49 +444,79 @@ contract SasWecoin is ISasWecoin {
         if (user.depositAmount == 0) return 0;
 
         uint lastEpoch = _getLastEpoch(user.lastAction);
+        uint lastTimestamp = user.lastAction;
         uint currentEpoch = _currentEpoch();
         uint rewardsAccumulated;
         uint epochTotal; // total reward pool amount on that epoch
         uint totalEmitted;
         uint usedStakingPower;
-        uint userStakingPower = user.depositAmount;
         uint offset;
+
+        // USE accumulators
+        if (user.lastAction < prevTimestamp) {
+            rewardsAccumulated =
+                user.depositAmount *
+                accumulatedRewardsPerStakingPower;
+            if (user.endLockEpoch > 0) {
+                if (user.endLockEpoch >= lastAccumulatedEpoch) {
+                    rewardsAccumulated +=
+                        user.bonusAmount *
+                        accumulatedRewardsPerStakingPower;
+                } else {
+                    rewardsAccumulated +=
+                        user.bonusAmount *
+                        epochs[user.endLockEpoch].finalEpochAccumulation;
+                }
+            }
+            lastEpoch = lastAccumulatedEpoch;
+            lastTimestamp = prevTimestamp;
+        }
+
         for (uint i = lastEpoch; i <= currentEpoch; i++) {
+            uint userStakingPower = user.depositAmount;
             // If current EPOCHTotalBaseReward is 0, get previous epoch and adjust
             if (epochs[i].epochTotalBaseReward == 0 && i > 0) {
-                epochTotal = epochs[i - 1].epochTotalBaseReward;
+                if (epochs[i - 1].epochTotalBaseReward > 0)
+                    epochTotal = epochs[i - 1].epochTotalBaseReward;
+
                 totalEmitted = (epochTotal * WEEKLY_EMISSIONS) / EMISSIONS_BASE;
                 epochTotal -= totalEmitted;
                 totalEmitted = 0;
             } else {
                 epochTotal = epochs[i].epochTotalBaseReward;
             }
-            (usedStakingPower, , ) = _getLatestStakingPower(i - 1);
+            (usedStakingPower, , ) = _getLatestStakingPower(i);
             if (user.endLockEpoch >= i && user.endLockEpoch != 0) {
                 userStakingPower += user.bonusAmount;
             }
+            if (i < lastAccumulatedEpoch && i > 0) {}
             totalEmitted = epochTotal * WEEKLY_EMISSIONS * MAGNIFIER;
             if (lastEpoch == currentEpoch) {
-                offset = block.timestamp - user.lastAction;
-                totalEmitted =
-                    (totalEmitted * offset) /
-                    (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
-                return (totalEmitted * userStakingPower) / MAGNIFIER;
+                offset = block.timestamp - lastTimestamp;
+                return
+                    (totalEmitted * offset * userStakingPower) /
+                    (EMISSIONS_BASE *
+                        EPOCH_DURATION *
+                        usedStakingPower *
+                        MAGNIFIER);
             }
+            offset = stakingStartTime + (i * EPOCH_DURATION);
             if (i == lastEpoch) {
-                offset = (i + 1) * EPOCH_DURATION - user.lastAction;
+                offset = offset + EPOCH_DURATION - lastTimestamp;
                 totalEmitted =
-                    (totalEmitted * offset) /
+                    (totalEmitted * offset * userStakingPower) /
                     (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
                 rewardsAccumulated += totalEmitted;
             } else if (i == currentEpoch) {
-                offset = block.timestamp - (i * EPOCH_DURATION);
+                offset = block.timestamp - offset;
                 totalEmitted =
-                    (totalEmitted * offset) /
+                    (totalEmitted * offset * userStakingPower) /
                     (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
                 rewardsAccumulated += totalEmitted * userStakingPower + offset;
             } else {
-                totalEmitted /= (usedStakingPower * EPOCH_DURATION);
+                totalEmitted =
+                    (totalEmitted * userStakingPower) /
+                    (usedStakingPower * EMISSIONS_BASE);
                 rewardsAccumulated += totalEmitted;
             }
         }

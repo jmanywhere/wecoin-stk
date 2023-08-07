@@ -85,7 +85,7 @@ contract SasWecoinTest is Test {
         assertEq(deposit, 100 ether);
         assertEq(bonus, 0);
         assertEq(offset, 0);
-        assertEq(last, block.timestamp);
+        assertEq(last, initStartTime);
         assertEq(lock, 0);
         assertEq(endLock, 0);
 
@@ -105,7 +105,7 @@ contract SasWecoinTest is Test {
         assertEq(deposit, 100 ether);
         assertEq(bonus, prevBonus);
         assertEq(offset, 0);
-        assertEq(last, block.timestamp);
+        assertEq(last, initStartTime);
         assertEq(lock, 5);
         assertEq(endLock, 5);
         assertEq(lockedRewards, 0);
@@ -126,7 +126,7 @@ contract SasWecoinTest is Test {
         assertEq(deposit, 100 ether);
         assertEq(bonus, multiplier);
         assertEq(offset, 0);
-        assertEq(last, block.timestamp);
+        assertEq(last, initStartTime);
         assertEq(lock, 16);
         assertEq(endLock, 16);
         assertEq(lockedRewards, 0);
@@ -212,4 +212,63 @@ contract SasWecoinTest is Test {
         vm.prank(user1);
         sas.claimOrLock();
     }
+
+    function test_pending_Rewards() public addedReward {
+        // --------------- SAME DAY ----------------
+        vm.prank(user1);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+        vm.warp(initStartTime + 1 hours); // 1 hour after rewards started accruing
+        uint totalRewardPool = 100_000 ether;
+        uint baseEmission = totalRewardPool * 4;
+        uint expectedReward = (baseEmission * 1 hours) / uint(100_00 * 1 days);
+        assertEq(sas.pendingRewards(user1), expectedReward);
+
+        // ---------------- MULTIPLE EPOCHS ---------
+        vm.warp(initStartTime + 2 weeks);
+        expectedReward = (baseEmission * 7) / 100_00;
+        totalRewardPool -= expectedReward;
+        expectedReward += (totalRewardPool * 28) / 100_00;
+        uint u1rew = expectedReward;
+        assertEq(sas.pendingRewards(user1), expectedReward);
+        // ---------------- MULTIPLE USERS -----------
+        vm.prank(user2);
+        sas.deposit(150 ether, 0); // no duration staking, so equal distribution
+        skip(1 weeks);
+        totalRewardPool -= expectedReward;
+
+        assertEq(sas.pendingRewards(user2), 139.2170976 ether);
+        u1rew += 139.2170976 ether;
+        uint u1pending = sas.pendingRewards(user1);
+        if (u1rew > u1pending) assertLt(u1rew - u1pending, 10);
+        else assertLt(u1pending - u1rew, 10);
+
+        // ---------------- MULTIPLE USERS & 1 EARLY WITHDRAW -------------
+    }
+
+    function test_withdraw_before_lock_ends() public addedReward {
+        vm.prank(user1);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+        vm.prank(user2);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+        vm.prank(user3);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+
+        vm.warp(initStartTime + 1 hours); // 1 hour after rewards started accruing
+
+        uint initBalance = wecoin.balanceOf(user1);
+        // since all 3 test users entered with the exact same staking power each, each user only gets 1/3 of the toralRewards;
+        uint expectedReward = uint(100_000 ether * 4 * 1 hours) /
+            uint(100_00 * 1 days * 3);
+
+        vm.prank(user1);
+        sas.withdraw();
+
+        assertEq(wecoin.balanceOf(user1), initBalance + 95 ether);
+        assertEq(sas.nextEpochRewardAddition(), 5 ether + expectedReward);
+        (, , uint adjustment, ) = sas.epochs(5);
+        // Magnifier is 0.5x so 100 * 0.5 * 2 = 100 ether
+        assertEq(adjustment, 100 ether);
+    }
+
+    function test_withdraw_after_lock_ends() public addedReward {}
 }
