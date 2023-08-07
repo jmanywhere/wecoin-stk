@@ -263,12 +263,44 @@ contract SasWecoinTest is Test {
         vm.prank(user1);
         sas.withdraw();
 
+        assertEq(sas.pendingRewards(user1), 0);
+        assertEq(sas.pendingRewards(user2), expectedReward);
+        assertEq(sas.pendingRewards(user3), expectedReward);
+
         assertEq(wecoin.balanceOf(user1), initBalance + 95 ether);
         assertEq(sas.nextEpochRewardAddition(), 5 ether + expectedReward);
         (, , uint adjustment, ) = sas.epochs(5);
         // Magnifier is 0.5x so 100 * 0.5 * 2 = 100 ether
         assertEq(adjustment, 100 ether);
+
+        initBalance = wecoin.balanceOf(user2);
+        vm.warp(initStartTime + 3.5 weeks);
+        uint fullRewards = sas.pendingRewards(user2);
+        vm.prank(user2);
+        sas.withdraw();
+
+        assertGt(wecoin.balanceOf(user2), initBalance + 100 ether);
+        fullRewards = (fullRewards * 8) / 10; // 80% of the rewards are sent back to pool
+        initBalance = sas.nextEpochRewardAddition();
+        if (fullRewards > initBalance)
+            assertLt(fullRewards - initBalance, 0.1 ether);
+        else assertLt(initBalance - fullRewards, 0.1 ether);
     }
 
-    function test_withdraw_after_lock_ends() public addedReward {}
+    function test_withdraw_after_lock_ends() public addedReward {
+        vm.prank(user1);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+        vm.prank(user2);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+        vm.prank(user3);
+        sas.deposit(100 ether, 4); // 4 weeks = 1.5 Multiplier
+
+        vm.warp(initStartTime + 5 weeks);
+
+        vm.prank(user3);
+        sas.withdraw();
+
+        assertEq(sas.nextEpochRewardAddition(), 0);
+        assertEq(sas.pendingRewards(user3), 0);
+    }
 }

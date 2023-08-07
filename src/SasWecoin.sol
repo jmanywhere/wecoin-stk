@@ -148,7 +148,8 @@ contract SasWecoin is ISasWecoin {
                 EPOCH_DURATION +
                 stakingStartTime -
                 block.timestamp;
-            uint threshold = (user.lockDuration * EPOCH_DURATION) / 2;
+            uint full = user.lockDuration * EPOCH_DURATION;
+            uint threshold = full / 2;
             // Penalty of 50% threshold
             if (epochDiff > threshold) {
                 // Principal penalty
@@ -162,8 +163,8 @@ contract SasWecoin is ISasWecoin {
                 penalty += user.lockedRewards;
             } else {
                 // MATH penalty
-                penalty = (180000 * threshold) - (epochDiff * 1600);
-                penalty = (user.lockedRewards * penalty) / (threshold * 1000);
+                penalty = (180 * full) - ((full - epochDiff) * 160);
+                penalty = (user.lockedRewards * penalty) / (full * 100);
                 withdrawableAmount += user.lockedRewards - penalty;
                 emit WithdrawPenalty(msg.sender, 0, penalty);
             }
@@ -493,12 +494,10 @@ contract SasWecoin is ISasWecoin {
             totalEmitted = epochTotal * WEEKLY_EMISSIONS * MAGNIFIER;
             if (lastEpoch == currentEpoch) {
                 offset = block.timestamp - lastTimestamp;
-                return
+                totalEmitted =
                     (totalEmitted * offset * userStakingPower) /
-                    (EMISSIONS_BASE *
-                        EPOCH_DURATION *
-                        usedStakingPower *
-                        MAGNIFIER);
+                    (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
+                return (rewardsAccumulated + totalEmitted) / MAGNIFIER;
             }
             offset = stakingStartTime + (i * EPOCH_DURATION);
             if (i == lastEpoch) {
@@ -512,7 +511,7 @@ contract SasWecoin is ISasWecoin {
                 totalEmitted =
                     (totalEmitted * offset * userStakingPower) /
                     (EMISSIONS_BASE * EPOCH_DURATION * usedStakingPower);
-                rewardsAccumulated += totalEmitted * userStakingPower + offset;
+                rewardsAccumulated += totalEmitted;
             } else {
                 totalEmitted =
                     (totalEmitted * userStakingPower) /
