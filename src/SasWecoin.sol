@@ -4,8 +4,6 @@ pragma solidity 0.8.19;
 import "openzeppelin/token/ERC20/IERC20.sol";
 import "./interfaces/ISasWecoin.sol";
 import "openzeppelin/utils/math/Math.sol";
-// TODO REMOVE
-import "forge-std/console.sol";
 
 error SasWecoin__NoBalanceToWithdraw();
 error SasWecoin__NothingToClaim();
