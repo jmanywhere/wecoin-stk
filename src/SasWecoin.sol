@@ -362,6 +362,7 @@ contract SasWecoin is ISasWecoin {
             claimableRewards += accumulatedRewards - endEpochAccumulated;
             claimableRewards /= MAGNIFIER;
             claimableRewards += user.lockedRewards;
+            user.offsetPoints = accumulatedRewards;
             user.lockedRewards = 0;
         } else {
             accumulatedRewards =
