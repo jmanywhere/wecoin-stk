@@ -329,6 +329,8 @@ contract SasWecoin is ISasWecoin {
         uint accumulatedRewards;
         uint claimableRewards;
         bool hasLocked = user.endLockEpoch != 0;
+        // update lastAction
+        user.lastAction = block.timestamp;
 
         if (currentEpoch <= user.endLockEpoch && hasLocked) {
             userStakingPower += user.bonusAmount;
@@ -340,6 +342,7 @@ contract SasWecoin is ISasWecoin {
                 MAGNIFIER;
             user.offsetPoints = accumulatedRewards;
             emit LockReward(_user, user.lockedRewards);
+            return;
         } else if (
             currentEpoch > user.endLockEpoch &&
             lastEpoch <= user.endLockEpoch &&
@@ -374,8 +377,6 @@ contract SasWecoin is ISasWecoin {
             user.offsetPoints = accumulatedRewards;
             user.lockedRewards = 0;
         }
-
-        user.lastAction = block.timestamp;
 
         if (claimableRewards > 0) {
             WECOIN.transfer(_user, claimableRewards);
